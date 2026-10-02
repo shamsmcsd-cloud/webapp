@@ -1,0 +1,67 @@
+name: Terraform (dev -> uat -> prod)
+
+# PR:           fmt + validate + plan DEV (shown in the job log)
+# push to main: plan+apply DEV -> plan UAT -> [approval] apply UAT -> plan PROD -> [approval] apply PROD
+# Each apply runs the exact plan file that was reviewed, never a fresh plan.
+on:
+  pull_request:
+    paths: ["infra/**", "app/**", ".github/workflows/**"]
+  push:
+    branches: [main]
+    paths: ["infra/**", "app/**", ".github/workflows/**"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: App smoke test
+        working-directory: app
+        run: |
+          pip install -q -r requirements.txt
+          python -c "from app import app; c = app.test_client(); assert c.get('/').status_code == 200; assert c.get('/health').json['status'] == 'ok'; print('app ok')"
+
+  dev:
+    needs: validate
+    uses: ./.github/workflows/_terraform-env.yml
+    with:
+      environment: dev
+      apply: ${{ github.event_name != 'pull_request' }}
+
+  uat:
+    needs: dev
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_terraform-env.yml
+    with:
+      environment: uat
+      apply: true
+
+  prod:
+    needs: uat
+    uses: ./.github/workflows/_terraform-env.yml
+    with:
+      environment: prod
+      apply: true

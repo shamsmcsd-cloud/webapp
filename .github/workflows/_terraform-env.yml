@@ -1,0 +1,95 @@
+name: _terraform-env
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: dev | uat | prod
+        type: string
+        required: true
+      apply:
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: 1.10.3
+  TF_IN_AUTOMATION: "true"
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  plan:
+    name: plan ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    # "<env>-plan" environments have no approvers; they only scope the OIDC subject and variables.
+    environment: ${{ inputs.environment }}-plan
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - run: terraform init -input=false -backend-config=backends/${{ inputs.environment }}.hcl
+
+      - name: terraform plan
+        run: |
+          terraform plan -input=false -lock-timeout=5m \
+            -var-file=environments/${{ inputs.environment }}.tfvars -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+          { echo "### Plan: ${{ inputs.environment }}"; echo '```'; tail -c 60000 plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The plan references the app zip it built, so both travel to the apply job together.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: |
+            infra/tfplan
+            infra/.build/
+            infra/.terraform.lock.hcl
+          include-hidden-files: true
+          retention-days: 14
+
+  apply:
+    name: apply ${{ inputs.environment }}
+    needs: plan
+    if: inputs.apply
+    runs-on: ubuntu-latest
+    # Required reviewers on "uat" and "prod" make this job wait for approval after the plan is visible.
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: infra
+
+      - run: terraform init -input=false -backend-config=backends/${{ inputs.environment }}.hcl
+      - run: terraform apply -input=false -lock-timeout=5m tfplan
+
+      - name: Smoke test
+        run: |
+          url=$(terraform output -raw url)
+          echo "Testing $url"
+          for i in $(seq 1 30); do
+            body=$(curl -fsS "$url/" || true)
+            if echo "$body" | grep -qi "hello world"; then echo "OK: $body"; echo "**$url** → $body" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+            echo "waiting for app ($i/30)..."; sleep 20
+          done
+          echo "::error::$url did not return Hello world"; exit 1
