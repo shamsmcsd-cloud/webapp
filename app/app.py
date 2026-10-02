@@ -10,7 +10,7 @@ APP_ENV = os.environ.get("APP_ENV", "local")
 
 @app.get("/")
 def hello():
-    return f"Hello world from {APP_ENV.upper()}!"
+    return f"Hello world from shams {APP_ENV.upper()}!"
 
 
 @app.get("/health")
