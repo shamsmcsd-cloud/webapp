@@ -1,0 +1,14 @@
+# Project 1 - Isolation
+project1/ @shams-dev @team-lead
+
+# Project 2 - Isolation
+project2/ @shams-dev @team-lead
+
+# Project 3 - Isolation
+project3/ @shams-dev @team-lead
+
+# GitHub Workflows - Requires approval
+.github/workflows/ @shams-dev @team-lead
+
+# CI/CD configuration changes require review
+.github/ @shams-dev @team-lead

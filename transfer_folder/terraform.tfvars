@@ -1,0 +1,6 @@
+resource_group_name   = "project3-rg"
+location              = "eastus"
+environment           = "dev"
+app_service_plan_name = "project3-asp"
+web_app_name          = "project3-webapp-postholdings"
+sku_name              = "B1"

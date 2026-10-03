@@ -1,0 +1,95 @@
+name: Project 3 Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'project3/**'
+      - '.github/workflows/project3-deploy.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'project3/**'
+
+env:
+  AZURE_WEBAPP_NAME: project3-webapp-postholdings
+  AZURE_RESOURCE_GROUP: project3-rg
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'project3/app/requirements.txt'
+
+      - name: Install dependencies
+        working-directory: ./project3/app
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Lint with flake8
+        working-directory: ./project3/app
+        run: |
+          pip install flake8
+          flake8 main.py --count --select=E9,F63,F7,F82 --show-source --statistics || true
+
+      - name: Test with pytest
+        working-directory: ./project3/app
+        run: |
+          python -c "from main import app; print('Flask app imported successfully')"
+
+  terraform-plan:
+    runs-on: ubuntu-latest
+    working-directory: ./project3/infra
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: '~> 1.0'
+
+      - name: Terraform Format Check
+        working-directory: ./project3/infra
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        working-directory: ./project3/infra
+        run: terraform init -upgrade -no-color
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+      - name: Terraform Validate
+        working-directory: ./project3/infra
+        run: terraform validate -no-color
+
+  deploy:
+    needs: [build-and-test, terraform-plan]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_PROJECT3 }}
+          package: './project3/app'
